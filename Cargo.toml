@@ -1,0 +1,4 @@
+[package]
+name = "keylogger"
+version = "0.1.0"
+authors = ["Gulshan Singh <gsingh2011@gmail.com>"]
