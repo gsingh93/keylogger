@@ -5,6 +5,10 @@ extern crate libc;
 #[macro_use]
 extern crate log;
 
+mod input;
+
+use input::{is_key_event, is_key_press, is_key_release, is_shift, get_key_text, InputEvent};
+
 use std::process::{exit, Command};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -14,136 +18,15 @@ use getopts::Options;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-// Constants, structs, and arrays derived from /linux/include/linux/input.h
-
-const EV_KEY: u16 = 1;
-
-const KEY_RELEASE: i32 = 0;
-const KEY_PRESS: i32 = 1;
-
-const KEY_LEFTSHIFT: u16 = 42;
-const KEY_RIGHTSHIFT: u16 = 43;
-
-const MAX_KEYS: u16 = 112;
-
 #[derive(Debug)]
-#[repr(C)]
-struct InputEvent {
-    tv_sec: isize, // from timeval struct
-    tv_usec: isize, // from timeval struct
-    type_: u16,
-    code: u16,
-    value: i32
+struct Config {
+    device_file: String,
+    log_file: String
 }
 
-// Unknown key string
-const UK: &'static str = "";
-
-const KEY_NAMES: [&'static str; MAX_KEYS as usize] = [
-    UK, "<ESC>",
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=",
-    "<Backspace>", "<Tab>",
-    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p",
-    "[", "]", "<Enter>", "<LCtrl>",
-    "a", "s", "d", "f", "g", "h", "j", "k", "l", ";",
-    "'", "`", "<LShift>",
-    "\\", "z", "x", "c", "v", "b", "n", "m", ",", ".", "/",
-    "<RShift>",
-    "<KP*>",
-    "<LAlt>", " ", "<CapsLock>",
-    "<F1>", "<F2>", "<F3>", "<F4>", "<F5>", "<F6>", "<F7>", "<F8>", "<F9>", "<F10>",
-    "<NumLock>", "<ScrollLock>",
-    "<KP7>", "<KP8>", "<KP9>",
-    "<KP->",
-    "<KP4>", "<KP5>", "<KP6>",
-    "<KP+>",
-    "<KP1>", "<KP2>", "<KP3>", "<KP0>",
-    "<KP.>",
-    UK, UK, UK,
-    "<F11>", "<F12>",
-    UK, UK, UK, UK, UK, UK, UK,
-    "<KPEnter>", "<RCtrl>", "<KP/>", "<SysRq>", "<RAlt>", UK,
-    "<Home>", "<Up>", "<PageUp>", "<Left>", "<Right>", "<End>", "<Down>",
-    "<PageDown>", "<Insert>", "<Delete>"
-];
-
-const SHIFT_KEY_NAMES: [&'static str; MAX_KEYS as usize] = [
-    UK, "<ESC>",
-    "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+",
-    "<Backspace>", "<Tab>",
-    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
-    "{", "}", "<Enter>", "<LCtrl>",
-    "A", "S", "D", "F", "G", "H", "J", "K", "L", ":",
-    "\"", "~", "<LShift>",
-    "|", "Z", "X", "C", "V", "B", "N", "M", "<", ">", "?",
-    "<RShift>",
-    "<KP*>",
-    "<LAlt>", " ", "<CapsLock>",
-    "<F1>", "<F2>", "<F3>", "<F4>", "<F5>", "<F6>", "<F7>", "<F8>", "<F9>", "<F10>",
-    "<NumLock>", "<ScrollLock>",
-    "<KP7>", "<KP8>", "<KP9>",
-    "<KP->",
-    "<KP4>", "<KP5>", "<KP6>",
-    "<KP+>",
-    "<KP1>", "<KP2>", "<KP3>", "<KP0>",
-    "<KP.>",
-    UK, UK, UK,
-    "<F11>", "<F12>",
-    UK, UK, UK, UK, UK, UK, UK,
-    "<KPEnter>", "<RCtrl>", "<KP/>", "<SysRq>", "<RAlt>", UK,
-    "<Home>", "<Up>", "<PageUp>", "<Left>", "<Right>", "<End>", "<Down>",
-    "<PageDown>", "<Insert>", "<Delete>"
-];
-
-// Determines whether the given key code is a shift
-fn is_shift(code: u16) -> bool {
-    code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT
-}
-
-// Converts a key code to it's ascii representation. Some unprintable keys like escape are printed
-// as a name between angled brackets, i.e. <ESC>
-fn get_key_text(code: u16, shift_pressed: u8) -> &'static str {
-    let arr = if shift_pressed != 0 {
-        SHIFT_KEY_NAMES
-    } else {
-        KEY_NAMES
-    };
-
-    if code < MAX_KEYS {
-        return arr[code as usize];
-    } else {
-        println!("Unknown key: {}", code); // TODO
-        return UK;
-    }
-}
-
-
-// Detects and returns the name of the keyboard device file. This function uses
-// the fact that all device information is shown in /proc/bus/input/devices and
-// the keyboard device file should always have an EV of 120013
-fn get_keyboard_device_filenames() -> Vec<String> {
-    let mut command_str = "grep -E 'Handlers|EV' /proc/bus/input/devices".to_string();
-    command_str.push_str("| grep -B1 120013");
-    command_str.push_str("| grep -Eo event[0-9]+");
-
-    let res = Command::new("sh").arg("-c").arg(command_str).output().unwrap_or_else(|e| {
-        panic!("{}", e);
-    });
-    let res_str = std::str::from_utf8(&res.stdout).unwrap();
-
-    let mut filenames = Vec::new();
-    for file in res_str.trim().split('\n') {
-        let mut filename = "/dev/input/".to_string();
-        filename.push_str(file);
-        filenames.push(filename);
-    }
-    filenames
-}
-
-fn root_check() {
-    let euid = unsafe { libc::geteuid() };
-    if euid != 0 {
-        panic!("Must run as root user");
+impl Config {
+    fn new(device_file: String, log_file: String) -> Self {
+        Config { device_file: device_file, log_file: log_file }
     }
 }
 
@@ -171,8 +54,8 @@ fn main() {
             panic!("Error while reading from device file");
         }
         let event: InputEvent = unsafe { mem::transmute(buf) };
-        if event.type_ == EV_KEY {
-            if event.value == KEY_PRESS {
+        if is_key_event(event.type_) {
+            if is_key_press(event.value) {
                 if is_shift(event.code) {
                     shift_pressed += 1;
                 }
@@ -183,12 +66,19 @@ fn main() {
                 if num_bytes != text.len() {
                     panic!("Error while writing to log file");
                 }
-            } else if event.value == KEY_RELEASE {
+            } else if is_key_release(event.value) {
                 if is_shift(event.code) {
                     shift_pressed -= 1;
                 }
             }
         }
+    }
+}
+
+fn root_check() {
+    let euid = unsafe { libc::geteuid() };
+    if euid != 0 {
+        panic!("Must run as root user");
     }
 }
 
@@ -235,14 +125,24 @@ fn get_default_device() -> String {
     }
 }
 
-#[derive(Debug)]
-struct Config {
-    device_file: String,
-    log_file: String
-}
+// Detects and returns the name of the keyboard device file. This function uses
+// the fact that all device information is shown in /proc/bus/input/devices and
+// the keyboard device file should always have an EV of 120013
+fn get_keyboard_device_filenames() -> Vec<String> {
+    let mut command_str = "grep -E 'Handlers|EV' /proc/bus/input/devices".to_string();
+    command_str.push_str("| grep -B1 120013");
+    command_str.push_str("| grep -Eo event[0-9]+");
 
-impl Config {
-    fn new(device_file: String, log_file: String) -> Self {
-        Config { device_file: device_file, log_file: log_file }
+    let res = Command::new("sh").arg("-c").arg(command_str).output().unwrap_or_else(|e| {
+        panic!("{}", e);
+    });
+    let res_str = std::str::from_utf8(&res.stdout).unwrap();
+
+    let mut filenames = Vec::new();
+    for file in res_str.trim().split('\n') {
+        let mut filename = "/dev/input/".to_string();
+        filename.push_str(file);
+        filenames.push(filename);
     }
+    filenames
 }
