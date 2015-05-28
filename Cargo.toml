@@ -1,4 +1,9 @@
 [package]
 name = "keylogger"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Gulshan Singh <gsingh2011@gmail.com>"]
+
+[dependencies]
+getopts = "*"
+env_logger = "*"
+log = "*"

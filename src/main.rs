@@ -1,6 +1,17 @@
-use std::process::Command;
+extern crate getopts;
+extern crate env_logger;
+
+#[macro_use]
+extern crate log;
+
+use std::process::{exit, Command};
 use std::fs::File;
 use std::io::Read;
+use std::env;
+
+use getopts::Options;
+
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 // Constants, structs, and arrays derived from /linux/include/linux/input.h
 
@@ -13,7 +24,6 @@ const KEY_LEFTSHIFT: u16 = 42;
 const KEY_RIGHTSHIFT: u16 = 43;
 
 const MAX_KEYS: u16 = 112;
-
 
 #[derive(Debug)]
 #[repr(C)]
@@ -28,7 +38,7 @@ struct InputEvent {
 // Unknown key string
 const UK: &'static str = "";
 
-const key_names: [&'static str; MAX_KEYS as usize] = [
+const KEY_NAMES: [&'static str; MAX_KEYS as usize] = [
     UK, "<ESC>",
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=",
     "<Backspace>", "<Tab>",
@@ -56,7 +66,7 @@ const key_names: [&'static str; MAX_KEYS as usize] = [
     "<PageDown>", "<Insert>", "<Delete>"
 ];
 
-const shift_key_names: [&'static str; MAX_KEYS as usize] = [
+const SHIFT_KEY_NAMES: [&'static str; MAX_KEYS as usize] = [
     UK, "<ESC>",
     "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+",
     "<Backspace>", "<Tab>",
@@ -93,9 +103,9 @@ fn is_shift(code: u16) -> bool {
 // as a name between angled brackets, i.e. <ESC>
 fn get_key_text(code: u16, shift_pressed: u8) -> &'static str {
     let arr = if shift_pressed != 0 {
-        shift_key_names
+        SHIFT_KEY_NAMES
     } else {
-        key_names
+        KEY_NAMES
     };
 
     if code < MAX_KEYS {
@@ -130,18 +140,19 @@ fn get_keyboard_device_filenames() -> Vec<String> {
 }
 
 fn main() {
-    let filenames = get_keyboard_device_filenames();
-    println!("{}", filenames[1]);
-    let mut f = File::open(&filenames[1]).unwrap_or_else(|e| {
-        panic!("{}", e);
-    });
+    env_logger::init().unwrap();
+
+    let config = parse_args();
+    debug!("Config: {:?}", config);
+
+    let mut device_file = File::open(&config.device_path).unwrap_or_else(|e| panic!("{}", e));
     let mut buf: [u8; 24] = unsafe { std::mem::zeroed() };
 
-    // We use a u8 here instead of a bool to handle the rare case that both shift keys are pressed
+    // We use a u8 here instead of a bool to handle the rare case when both shift keys are pressed
     // and then one is released
     let mut shift_pressed = 0;
     loop {
-        f.read(&mut buf).unwrap();
+        device_file.read(&mut buf).unwrap();
         let event: InputEvent = unsafe { std::mem::transmute(buf) };
         if event.type_ == EV_KEY {
             if event.value == KEY_PRESS {
@@ -155,5 +166,60 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+fn parse_args() -> Config {
+    fn print_usage(program: &str, opts: Options) {
+        let brief = format!("Usage: {} [options]", program);
+        println!("{}", opts.usage(&brief));
+    }
+
+    let args: Vec<_> = env::args().collect();
+
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "prints this help message");
+    opts.optflag("v", "version", "prints the version");
+    opts.optopt("d", "device", "specify the device file", "DEVICE");
+    opts.optopt("f", "file", "specify the file to log to", "FILE");
+
+    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| panic!("{}", e));
+    if matches.opt_present("h") {
+        print_usage(&args[0], opts);
+        exit(0);
+    }
+
+    if matches.opt_present("v") {
+        println!("{}", VERSION);
+        exit(0);
+    }
+
+    let device_path = matches.opt_str("d").unwrap_or_else(|| get_default_device());
+    let filename = matches.opt_str("f").unwrap_or("keys.log".to_owned());
+
+    Config::new(device_path, filename)
+}
+
+fn get_default_device() -> String {
+    let mut filenames = get_keyboard_device_filenames();
+    debug!("Detected devices: {:?}", filenames);
+
+    if filenames.len() == 1 {
+        filenames.swap_remove(0)
+    } else {
+        panic!("The following keyboard devices were detected: {:?}. Please select one using \
+                the `-d` flag", filenames);
+    }
+}
+
+#[derive(Debug)]
+struct Config {
+    device_path: String,
+    filename: String
+}
+
+impl Config {
+    fn new(device_path: String, filename: String) -> Self {
+        Config { device_path: device_path, filename: filename }
     }
 }
