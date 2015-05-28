@@ -5,5 +5,6 @@ authors = ["Gulshan Singh <gsingh2011@gmail.com>"]
 
 [dependencies]
 getopts = "*"
+libc = "*"
 env_logger = "*"
 log = "*"

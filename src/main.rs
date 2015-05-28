@@ -1,5 +1,6 @@
 extern crate getopts;
 extern crate env_logger;
+extern crate libc;
 
 #[macro_use]
 extern crate log;
@@ -139,7 +140,16 @@ fn get_keyboard_device_filenames() -> Vec<String> {
     filenames
 }
 
+fn root_check() {
+    let euid = unsafe { libc::geteuid() };
+    if euid != 0 {
+        panic!("Must run as root user");
+    }
+}
+
 fn main() {
+    root_check();
+
     env_logger::init().unwrap();
 
     let config = parse_args();
